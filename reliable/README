@@ -1,0 +1,164 @@
+CS144 Lab 2 README
+Author - Bharath Bhat
+SUNet ID - bbhat (05659838)
+
+----------------------CODE OVERVIEW------------------------
+
+I have implemented a sliding window protocol reliable two-way transport system that works for any window size. I have implemented Nagle's algorithm and support for server mode operations. I have also implemented an approximate version of FIN_WAIT to ensure proper termination. 
+
+----------------------DATA STRUCTURES-----------------------
+
+Each reliable_state_t object contains a set of send_state variables and a set of receive_state variables. These are encapsulated in structures named similarly.
+
+struct send_state:
+
+  in_flight_buf: linked list of packets currently in flight, ordered in increasing order of sequence numbers.
+  waiting_buf: linked list of packets waiting to be sent, head points to the first packet that will be sent next
+  in_buf: buffer for data from stdin not yet formed into a packet
+  last_ack: packets up to this sequence number have been acked
+  last_sent: packets up to this sequence number have been sent
+  partial_packet_out: set to true if partial packet is in flight
+  partial_packet_seqno: sequence number of the partial packet in flight. Valid only when 'partial_packet_out' is set
+  terminate_connection: set to true if EOF received from stdin
+  terminate_time: time when 'terminate_connection' was set to true
+  config: connection configuration (window size, timeout ...)
+
+struct receive_state:
+
+  buf: linked list of packets received, but not yet acked, maintained in increasing order of sequence numbers
+  out_buf: Buffer to hold bytes waiting to be output to stdout (when waiting for conn_bufspace to clear)
+  last_ack: last acknowledgement number sent
+  terminate_connection: set to true when EOF packet received from other side
+  terminate_time: time when EOF packet was received from other side
+  config: connection configuration (window, timeout...) 
+
+-------------HELPER FUNCTIONS FOR REL_CREATE()-------------
+
+init_send_state(): Constructor for send state variables
+
+init_receive_state(): Constructor for receive state variables
+
+
+-------------HELPER FUNCTIONS FOR REL_READ()---------------
+
+process_input_buffer(): Called when new data is read into send_state.in_buf from stdin
+
+process_end_of_file(): Called when EOF is read from stdin
+
+packetize_buffer(): Used to convert raw data into packets. Newly formed packets are added to send_state.waiting_buf
+
+transmit_waiting_packets(): Used to transmit packets waiting in queue. Removes packets from send_state.waiting_buf and adds to send_state.in_flight_buf
+
+-------------HELPER FUNCTIONS FOR REL_RECVPKT()------------
+
+handle_acknowledgements(): Called when an acknowledgement is received. Removes ack'ed packets from send state in-flight queue.
+
+handle_datapackets(): Called when a data packet is received. Packet gets added to receive buffer (receive_state.buf)
+
+-------------HELPER FUNCTIONS FOR REL_DEMUX()--------------
+
+try_new_connection(): Called when none of the existing connections match the sock addr of a received packet. Checks if the received packet has sequence number 1, and if so, creates a new connection
+
+-------------HELPER FUNCTIONS FOR REL_OUTPUT()-------------
+
+send_acknowledgement(): Called after packets are drained from the receive buffer, safe to ack now.
+
+-------------HELPER FUNCTIONS FOR REL_TIMER()--------------
+
+retry_sending(): Checks each packet in the send state in-flight queue for timeout and retransmits any that have timed out. 
+
+-------------HELPER FUNCTIONS FOR REL_DESTROY()-----------
+
+terminate_connection(): Checks if all terminate conditions hold, and if so, called rel_destroy. This function is also called from rel_timer()
+
+destroy_send_state(): Frees all send state variables
+
+destroy_receive_state(): Frees all receive state variables
+
+destroy_in_flight_buffer(): Free linked list of in flight packets
+
+destroy_packet_buffer(): Free linked list of packets
+
+-------------MEMORY MANAGEMENT TESTING WITH VALGRIND-----
+
+I ran valgrind on my program, both in the server mode and client mode, with different window sizes and other parameters such as drop rate, delay rate, corruption rate and duplication rate. Basically, all my testing was done with the valgrind option on, and I DID NOT find any memory leaks or errors.
+
+valgrind was run with the options --leak-check=full --show-reachable=yes
+
+Here's a copy of the valgrind output for one such case. Notice that the only memory leaks are from rlib.c calls:
+
+
+-------------VALGRIND OUTPUT-----------------------------
+
+myth6:~/cs144/lab3/reliable> valgrind --leak-check=full --show-reachable=yes ./reliable -s -w 5 53535 myth5:23423
+==21931== Memcheck, a memory error detector
+==21931== Copyright (C) 2002-2011, and GNU GPL'd, by Julian Seward et al.
+==21931== Using Valgrind-3.7.0 and LibVEX; rerun with -h for copyright info
+==21931== Command: ./reliable -s 53535 myth5:23423
+==21931== 
+[listening on UDP port 53535]
+^C==21931== 
+==21931== HEAP SUMMARY:
+==21931==     in use at exit: 48 bytes in 3 blocks
+==21931==   total heap usage: 342 allocs, 339 frees, 70,488 bytes allocated
+==21931== 
+==21931== 16 bytes in 1 blocks are still reachable in loss record 1 of 3
+==21931==    at 0x4C2B6CD: malloc (in /usr/lib/valgrind/vgpreload_memcheck-amd64-linux.so)
+		==21931==    by 0x402E8B: xmalloc (rlib.c:101)
+		==21931==    by 0x40403F: conn_mkevents (rlib.c:493)
+		==21931==    by 0x404538: conn_poll (rlib.c:583)
+		==21931==    by 0x405770: do_server (rlib.c:966)
+		==21931==    by 0x405C96: main (rlib.c:1091)
+		==21931== 
+		==21931== 16 bytes in 1 blocks are still reachable in loss record 2 of 3
+		==21931==    at 0x4C2B6CD: malloc (in /usr/lib/valgrind/vgpreload_memcheck-amd64-linux.so)
+		==21931==    by 0x402E8B: xmalloc (rlib.c:101)
+		==21931==    by 0x4041E9: conn_mkevents (rlib.c:518)
+		==21931==    by 0x404538: conn_poll (rlib.c:583)
+		==21931==    by 0x405770: do_server (rlib.c:966)
+		==21931==    by 0x405C96: main (rlib.c:1091)
+		==21931== 
+		==21931== 16 bytes in 1 blocks are still reachable in loss record 3 of 3
+		==21931==    at 0x4C2B6CD: malloc (in /usr/lib/valgrind/vgpreload_memcheck-amd64-linux.so)
+		==21931==    by 0x402E8B: xmalloc (rlib.c:101)
+		==21931==    by 0x40421A: conn_mkevents (rlib.c:520)
+		==21931==    by 0x404538: conn_poll (rlib.c:583)
+		==21931==    by 0x405770: do_server (rlib.c:966)
+		==21931==    by 0x405C96: main (rlib.c:1091)
+		==21931== 
+		==21931== LEAK SUMMARY:
+		==21931==    definitely lost: 0 bytes in 0 blocks
+		==21931==    indirectly lost: 0 bytes in 0 blocks
+		==21931==      possibly lost: 0 bytes in 0 blocks
+		==21931==    still reachable: 48 bytes in 3 blocks
+		==21931==         suppressed: 0 bytes in 0 blocks
+		==21931== 
+		==21931== For counts of detected and suppressed errors, rerun with: -v
+		==21931== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 2 from 2)
+
+
+-------------END OF VALGRIND OUTPUT------------------------
+
+------------------TEST CASES-------------------------------
+
+(a) Provided Test Suite:
+
+Ensures that the code passes the given set of test cases with different options - Server mode, multiple window sizes and multiple seed values
+
+(b) Custom Tests:
+
+The main variables in my testing were 
+	(i) Data being transported (large file / burst of short messages / bi-directional / uni-directional)
+	(ii) Network conditions (normal, drop = 2/5/10, delay=2/5/10, duplicate = 2/5/10, corrupt = 2, ICMP Port Unreachable)
+	(iii) Network configuration (window size(1/5/10/20), server/client/single_connection modes, one side running REFERENCE)
+
+I tested every combination of the variables as mentioned above and eye-balled the resulting output at either end to make sure that the output was the same as input. For a large file, I just sent the file reliable.c over the network and diff'ed it with the version on the other side. For burst of short messages, I created a file with several short lines separated by newlines, and used 'diff' again as before. 
+
+I also ran some of these tests (particularly those with window size > 1) with the -d option, and made sure that 
+	(i) the number of packets in flight was <= window size
+	(ii) the system was sending 'window size' number of packets if it had data to send (Full utilization)
+	(iii) Not more than one partial packet out at the same time
+	(iv) Unack'ed packets were retransmitted in order, if they had timed out. 
+	(v) Cumulative acks were sent whenever packets arrived out of order
+
+
